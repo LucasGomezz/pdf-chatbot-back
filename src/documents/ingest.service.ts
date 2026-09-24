@@ -3,6 +3,10 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import * as fs from 'fs';
 import * as path from 'path';
+// Debe importarse antes que 'pdf-parse': provee un CanvasFactory que evita que
+// la librería falle con "DOMMatrix is not defined" en entornos serverless
+// (Vercel/AWS Lambda) donde el paquete opcional @napi-rs/canvas no está disponible.
+import { CanvasFactory } from 'pdf-parse/worker';
 import { PDFParse } from 'pdf-parse';
 import { MaterialDocument, DocumentDoc } from './document.schema';
 import { Chunk, ChunkDocument } from './chunk.schema';
@@ -50,7 +54,7 @@ export class IngestService implements OnModuleInit {
   }
 
   async ingestPdfFile(buffer: Buffer, originalName: string): Promise<DocumentDoc> {
-    const parser = new PDFParse({ data: buffer });
+    const parser = new PDFParse({ data: buffer, CanvasFactory });
     const data = await parser.getText();
     await parser.destroy();
     const text = this.cleanPdfText(data.text);
