@@ -32,7 +32,7 @@ export class ChatService {
     if (!quota.allowed) {
       this.logger.warn(`Quota exceeded (${quota.reason}) for user=${userId}`);
       const message = quota.reason === 'user' ? USER_LIMIT_REPLY : GLOBAL_LIMIT_REPLY;
-      yield { type: 'limit', data: { message } };
+      yield { type: 'limit', data: { message, reason: quota.reason } };
       return;
     }
 
