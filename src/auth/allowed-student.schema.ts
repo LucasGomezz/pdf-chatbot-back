@@ -7,6 +7,9 @@ export type AllowedStudentDocument = AllowedStudent & Document;
 export class AllowedStudent {
   @Prop({ required: true, unique: true, lowercase: true, trim: true })
   email: string;
+
+  @Prop({ default: false })
+  isAdmin: boolean;
 }
 
 export const AllowedStudentSchema = SchemaFactory.createForClass(AllowedStudent);

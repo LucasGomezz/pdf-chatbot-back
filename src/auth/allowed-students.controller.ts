@@ -6,16 +6,22 @@ import { memoryStorage } from 'multer';
 import * as path from 'path';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { RolesGuard } from './roles.guard';
+import { SuperAdminGuard } from './super-admin.guard';
 import { Roles } from './decorators/roles.decorator';
 import { AllowedStudentsService } from './allowed-students.service';
 import { AddStudentsDto } from './dto/add-students.dto';
 import { UpdateStudentDto } from './dto/update-student.dto';
+import { SetAdminDto } from './dto/set-admin.dto';
+import { UsersService } from '../users/users.service';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('admin')
 @Controller('admin/students')
 export class AllowedStudentsController {
-  constructor(private allowedStudents: AllowedStudentsService) {}
+  constructor(
+    private allowedStudents: AllowedStudentsService,
+    private users: UsersService,
+  ) {}
 
   @Get()
   async list() {
@@ -44,6 +50,14 @@ export class AllowedStudentsController {
     if (!file) throw new BadRequestException('No file uploaded');
     const emails = file.buffer.toString('utf-8').split(/[\r\n,;]+/);
     return this.allowedStudents.add(emails);
+  }
+
+  @Patch(':email/admin')
+  @UseGuards(SuperAdminGuard)
+  async setAdmin(@Param('email') email: string, @Body() dto: SetAdminDto) {
+    await this.allowedStudents.setAdminFlag(email, dto.isAdmin);
+    await this.users.setRoleIfExists(email, dto.isAdmin ? 'admin' : 'student');
+    return { ok: true };
   }
 
   @Patch(':email')

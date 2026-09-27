@@ -1,5 +1,6 @@
 import { Injectable, ConflictException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { UsersService } from '../users/users.service';
 import { AllowedStudentsService } from './allowed-students.service';
@@ -13,17 +14,23 @@ export class AuthService {
     private users: UsersService,
     private jwt: JwtService,
     private allowedStudents: AllowedStudentsService,
+    private config: ConfigService,
   ) {}
 
+  private isSuperAdmin(email: string): boolean {
+    const superAdminEmail = this.config.get<string>('ADMIN_BOOTSTRAP_EMAIL');
+    return !!superAdminEmail && email.toLowerCase() === superAdminEmail.toLowerCase();
+  }
+
   async register(email: string, password: string) {
-    const allowed = await this.allowedStudents.isAllowed(email);
-    if (!allowed) throw new ForbiddenException(NOT_ALLOWED_MESSAGE);
+    const entry = await this.allowedStudents.findByEmail(email);
+    if (!entry) throw new ForbiddenException(NOT_ALLOWED_MESSAGE);
 
     const existing = await this.users.findByEmail(email);
     if (existing) throw new ConflictException('Email already registered');
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const user = await this.users.create(email, passwordHash);
+    const user = await this.users.create(email, passwordHash, entry.isAdmin ? 'admin' : 'student');
 
     return this.buildResponse(user);
   }
@@ -35,7 +42,7 @@ export class AuthService {
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) throw new UnauthorizedException('Invalid credentials');
 
-    if (user.role === 'student') {
+    if (!this.isSuperAdmin(user.email)) {
       const allowed = await this.allowedStudents.isAllowed(user.email);
       if (!allowed) throw new ForbiddenException(NOT_ALLOWED_MESSAGE);
     }
@@ -47,7 +54,12 @@ export class AuthService {
     const payload = { sub: user._id.toString(), email: user.email, role: user.role };
     return {
       token: this.jwt.sign(payload),
-      user: { id: user._id.toString(), email: user.email, role: user.role },
+      user: {
+        id: user._id.toString(),
+        email: user.email,
+        role: user.role,
+        isSuperAdmin: this.isSuperAdmin(user.email),
+      },
     };
   }
 }

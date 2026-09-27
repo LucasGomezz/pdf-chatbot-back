@@ -18,4 +18,8 @@ export class UsersService {
   async existsAdmin(): Promise<boolean> {
     return !!(await this.userModel.exists({ role: 'admin' }));
   }
+
+  async setRoleIfExists(email: string, role: UserRole): Promise<void> {
+    await this.userModel.updateOne({ email: email.toLowerCase().trim() }, { $set: { role } });
+  }
 }

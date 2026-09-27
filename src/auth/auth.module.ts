@@ -8,6 +8,7 @@ import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 import { WsJwtGuard } from './ws-jwt.guard';
 import { RolesGuard } from './roles.guard';
+import { SuperAdminGuard } from './super-admin.guard';
 import { UsersService } from '../users/users.service';
 import { User, UserSchema } from '../users/user.schema';
 import { AllowedStudent, AllowedStudentSchema } from './allowed-student.schema';
@@ -31,7 +32,7 @@ import { AllowedStudentsController } from './allowed-students.controller';
     ]),
   ],
   controllers: [AuthController, AllowedStudentsController],
-  providers: [AuthService, JwtStrategy, WsJwtGuard, RolesGuard, UsersService, AllowedStudentsService],
+  providers: [AuthService, JwtStrategy, WsJwtGuard, RolesGuard, SuperAdminGuard, UsersService, AllowedStudentsService],
   exports: [AuthService, JwtModule, WsJwtGuard, RolesGuard, UsersService],
 })
 export class AuthModule {}
