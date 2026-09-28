@@ -48,14 +48,14 @@ export class AllowedStudentsController {
       fileFilter: (_req, file, cb) => {
         const ext = path.extname(file.originalname).toLowerCase();
         if (ext !== '.csv' && ext !== '.txt') {
-          return cb(new BadRequestException('Only .csv or .txt files are allowed'), false);
+          return cb(new BadRequestException('Solo se aceptan archivos .csv o .txt'), false);
         }
         cb(null, true);
       },
     }),
   )
   async upload(@UploadedFile() file: Express.Multer.File) {
-    if (!file) throw new BadRequestException('No file uploaded');
+    if (!file) throw new BadRequestException('No se recibió ningún archivo');
     const emails = file.buffer.toString('utf-8').split(/[\r\n,;]+/);
     return this.allowedStudents.add(emails);
   }

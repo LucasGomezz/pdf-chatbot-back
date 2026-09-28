@@ -160,7 +160,7 @@ export class IngestService implements OnModuleInit {
   // hasta que el documento queda 'ready'.
   async processNext(id: string): Promise<IngestProgress> {
     const doc = await this.docModel.findById(id);
-    if (!doc) throw new NotFoundException('Document not found');
+    if (!doc) throw new NotFoundException('Documento no encontrado');
     if (doc.status !== 'processing') return this.progressOf(doc, 'ready');
 
     const started = Date.now();
@@ -229,7 +229,7 @@ export class IngestService implements OnModuleInit {
 
   async deleteDocument(id: string): Promise<void> {
     const doc = await this.docModel.findById(id);
-    if (!doc) throw new NotFoundException('Document not found');
+    if (!doc) throw new NotFoundException('Documento no encontrado');
     await this.chunkModel.deleteMany({ documentId: doc._id });
     await this.docModel.deleteOne({ _id: doc._id });
   }

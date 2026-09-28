@@ -46,7 +46,7 @@ export class DocumentsController {
       fileFilter: (_req, file, cb) => {
         const ext = path.extname(fixFilenameEncoding(file.originalname)).toLowerCase();
         if (!['.md', '.txt', '.pdf'].includes(ext)) {
-          return cb(new BadRequestException('Only .md, .txt or .pdf files are allowed'), false);
+          return cb(new BadRequestException('Solo se aceptan archivos .pdf, .md o .txt'), false);
         }
         cb(null, true);
       },
@@ -55,7 +55,7 @@ export class DocumentsController {
   // Las subidas solo crean el documento en estado 'processing'; los embeddings se
   // calculan después con llamadas cortas a POST :id/process.
   async upload(@UploadedFile() file: Express.Multer.File) {
-    if (!file) throw new BadRequestException('No file uploaded');
+    if (!file) throw new BadRequestException('No se recibió ningún archivo');
     const originalName = fixFilenameEncoding(file.originalname);
     const ext = path.extname(originalName).toLowerCase();
     const doc = ext === '.pdf'
@@ -70,7 +70,7 @@ export class DocumentsController {
   @Post('upload-text')
   async uploadText(@Body() dto: UploadTextDto) {
     if (path.extname(dto.fileName).toLowerCase() !== '.pdf') {
-      throw new BadRequestException('Only text extracted from .pdf files is accepted here');
+      throw new BadRequestException('Acá solo se acepta el texto extraído de un archivo .pdf');
     }
     const doc = await this.ingest.startPdfTextIngest(dto.text, dto.fileName);
     return this.ingest.processNext(String(doc._id));

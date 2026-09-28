@@ -29,7 +29,7 @@ export class AuthService {
     if (!entry) throw new ForbiddenException(NOT_ALLOWED_MESSAGE);
 
     const existing = await this.users.findByEmail(email);
-    if (existing) throw new ConflictException('Email already registered');
+    if (existing) throw new ConflictException('Ese email ya tiene una cuenta. Iniciá sesión.');
 
     const passwordHash = await bcrypt.hash(password, 10);
     const user = await this.users.create(email, passwordHash, entry.isAdmin ? 'admin' : 'student');
@@ -44,7 +44,7 @@ export class AuthService {
     const valid = !!user && (await bcrypt.compare(password, user.passwordHash));
     if (!user || !valid) {
       await this.loginAttempts.registerFailure(email);
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Email o contraseña incorrectos.');
     }
     await this.loginAttempts.reset(email);
 
