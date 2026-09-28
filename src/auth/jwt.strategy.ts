@@ -27,12 +27,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   // El rol y la autorización se leen de la base en cada request (no del token)
   // para que quitarle permisos a un docente o sacar a un alumno de la lista
   // tenga efecto inmediato, sin esperar a que venza el JWT.
+  // Las dos consultas van en paralelo: corren en cada request autenticado.
   async validate(payload: JwtPayload) {
-    const user = await this.users.findByEmail(payload.email);
+    const [user, allowed] = await Promise.all([
+      this.users.findByEmail(payload.email),
+      this.allowedStudents.isAllowed(payload.email),
+    ]);
     if (!user) throw new UnauthorizedException();
     const superAdminEmail = (this.config.get<string>('ADMIN_BOOTSTRAP_EMAIL') || '').toLowerCase();
     const isSuperAdmin = !!superAdminEmail && user.email === superAdminEmail;
-    if (!isSuperAdmin && !(await this.allowedStudents.isAllowed(user.email))) {
+    if (!isSuperAdmin && !allowed) {
       throw new UnauthorizedException();
     }
     return { userId: payload.sub, email: user.email, role: user.role, isSuperAdmin };
