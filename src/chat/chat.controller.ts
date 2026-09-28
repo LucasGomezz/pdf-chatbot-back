@@ -27,11 +27,17 @@ export class ChatController {
     @Res() res: Response,
   ) {
     const user = (req as any).user as { email: string; userId: string };
-    const question = body?.question?.trim();
-    const history = (body?.history ?? []).slice(-8).map((m) => ({
-      role: m.role,
-      content: String(m.content).slice(0, 800),
-    }));
+    const question = typeof body?.question === 'string' ? body.question.trim() : '';
+    // El historial viene del cliente: solo se aceptan turnos user/assistant, para
+    // que no se puedan inyectar mensajes con rol "system" que pisen las reglas del prompt.
+    const rawHistory = Array.isArray(body?.history) ? body.history : [];
+    const history = rawHistory
+      .filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
+      .slice(-8)
+      .map((m) => ({
+        role: m.role,
+        content: String(m.content).slice(0, 800),
+      }));
 
     this.logger.log(
       `ask from user=${user?.email}  q="${question?.slice(0, 60)}"  historyTurns=${history.length}`,
@@ -58,8 +64,9 @@ export class ChatController {
         res.write(`data: ${JSON.stringify(event)}\n\n`);
       }
     } catch (err: any) {
+      this.logger.error(`ask failed: ${err?.message}`);
       res.write(
-        `data: ${JSON.stringify({ type: 'chat_error', data: 'Error interno del servidor' })}\n\n`,
+        `data: ${JSON.stringify({ type: 'chat_error', data: 'No pude procesar la consulta por un problema técnico. Probá de nuevo en unos minutos.' })}\n\n`,
       );
     } finally {
       res.end();

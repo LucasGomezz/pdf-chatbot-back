@@ -6,8 +6,14 @@ import { UserUsage, UserUsageDocument, GlobalUsage, GlobalUsageDocument } from '
 
 export type QuotaCheck = { allowed: true } | { allowed: false; reason: 'user' | 'global' };
 
+// El día se cuenta en hora argentina: con UTC el contador se reiniciaba a las 21:00.
+const QUOTA_TIMEZONE = 'America/Argentina/Buenos_Aires';
+const dayFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: QUOTA_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit',
+});
+
 function todayKey(): string {
-  return new Date().toISOString().slice(0, 10);
+  return dayFormatter.format(new Date()); // YYYY-MM-DD
 }
 
 @Injectable()
@@ -42,5 +48,15 @@ export class UsageService {
     }
 
     return { allowed: true };
+  }
+
+  // Devuelve la consulta cuando la respuesta falló por un problema nuestro o del
+  // proveedor, para que el alumno no pierda cupo por algo que no es culpa suya.
+  async refund(userId: string): Promise<void> {
+    const date = todayKey();
+    await Promise.all([
+      this.userUsageModel.updateOne({ userId, date, count: { $gt: 0 } }, { $inc: { count: -1 } }),
+      this.globalUsageModel.updateOne({ date, count: { $gt: 0 } }, { $inc: { count: -1 } }),
+    ]);
   }
 }

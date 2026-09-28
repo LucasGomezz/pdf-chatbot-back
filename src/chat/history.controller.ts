@@ -1,4 +1,4 @@
-import { Controller, Get, Query, Request, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Query, Request, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { HistoryService } from './history.service';
 
@@ -9,6 +9,13 @@ export class HistoryController {
 
   @Get('history')
   getHistory(@Request() req: any, @Query('limit') limit?: string) {
-    return this.history.findByUser(req.user.userId, limit ? parseInt(limit, 10) : 20);
+    const parsed = parseInt(limit ?? '', 10);
+    const safeLimit = Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 100) : 20;
+    return this.history.findByUser(req.user.userId, safeLimit);
+  }
+
+  @Get('history/:id')
+  getOne(@Request() req: any, @Param('id') id: string) {
+    return this.history.findOneForUser(id, req.user.userId);
   }
 }

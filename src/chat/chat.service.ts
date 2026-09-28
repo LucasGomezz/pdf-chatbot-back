@@ -10,6 +10,8 @@ const COURSE_TITLE = 'Cátedra';
 const NO_CONTEXT_REPLY = 'No encuentro esa información en el material de la cátedra.';
 const USER_LIMIT_REPLY = 'Alcanzaste el límite de consultas de hoy. Podés volver a preguntar mañana.';
 const GLOBAL_LIMIT_REPLY = 'El asistente alcanzó su límite de uso por hoy. Por favor, volvé a intentar más tarde.';
+const BUSY_REPLY = 'El asistente está recibiendo muchas consultas en este momento. Esperá un minuto y volvé a intentar.';
+const GENERIC_ERROR_REPLY = 'No pude generar la respuesta por un problema técnico. Probá de nuevo en unos minutos.';
 
 @Injectable()
 export class ChatService {
@@ -73,8 +75,9 @@ export class ChatService {
       yield { type: 'done', data: { sources } };
       await this.historyService.save(userId, question, fullAnswer, sources);
     } catch (err: any) {
-      this.logger.error(`streamChat error: ${err.message}`);
-      yield { type: 'chat_error', data: err.message || 'Error generating response' };
+      this.logger.error(`streamChat error (status=${err?.status ?? 'n/a'}): ${err?.message}`);
+      await this.usage.refund(userId).catch(() => {});
+      yield { type: 'chat_error', data: err?.status === 429 ? BUSY_REPLY : GENERIC_ERROR_REPLY };
     }
   }
 }

@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { UsersService } from '../users/users.service';
 import { AllowedStudentsService } from './allowed-students.service';
+import { LoginAttemptsService } from './login-attempts.service';
 
 const NOT_ALLOWED_MESSAGE =
   'Tu email no está autorizado. Contactá a la cátedra si creés que es un error.';
@@ -15,6 +16,7 @@ export class AuthService {
     private jwt: JwtService,
     private allowedStudents: AllowedStudentsService,
     private config: ConfigService,
+    private loginAttempts: LoginAttemptsService,
   ) {}
 
   private isSuperAdmin(email: string): boolean {
@@ -36,11 +38,15 @@ export class AuthService {
   }
 
   async login(email: string, password: string) {
-    const user = await this.users.findByEmail(email);
-    if (!user) throw new UnauthorizedException('Invalid credentials');
+    await this.loginAttempts.assertNotLocked(email);
 
-    const valid = await bcrypt.compare(password, user.passwordHash);
-    if (!valid) throw new UnauthorizedException('Invalid credentials');
+    const user = await this.users.findByEmail(email);
+    const valid = !!user && (await bcrypt.compare(password, user.passwordHash));
+    if (!user || !valid) {
+      await this.loginAttempts.registerFailure(email);
+      throw new UnauthorizedException('Invalid credentials');
+    }
+    await this.loginAttempts.reset(email);
 
     if (!this.isSuperAdmin(user.email)) {
       const allowed = await this.allowedStudents.isAllowed(user.email);

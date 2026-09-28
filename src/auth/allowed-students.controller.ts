@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, Get, Param, Patch, Post, UploadedFile, UseGuards, UseInterceptors, BadRequestException,
+  Body, Controller, Delete, Get, Param, Patch, Post, Req, UploadedFile, UseGuards, UseInterceptors, BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -33,6 +33,14 @@ export class AllowedStudentsController {
     return this.allowedStudents.add(dto.emails);
   }
 
+  @Post('teachers')
+  @UseGuards(SuperAdminGuard)
+  async addTeachers(@Body() dto: AddStudentsDto) {
+    const result = await this.allowedStudents.addTeachers(dto.emails);
+    await Promise.all(result.emails.map((email) => this.users.setRoleIfExists(email, 'admin')));
+    return { added: result.added, promoted: result.promoted };
+  }
+
   @Post('upload')
   @UseInterceptors(
     FileInterceptor('file', {
@@ -61,8 +69,8 @@ export class AllowedStudentsController {
   }
 
   @Patch(':email')
-  async update(@Param('email') email: string, @Body() dto: UpdateStudentDto) {
-    await this.allowedStudents.update(email, dto.newEmail);
+  async update(@Param('email') email: string, @Body() dto: UpdateStudentDto, @Req() req: any) {
+    await this.allowedStudents.update(email, dto.newEmail, req.user.email);
     return { ok: true };
   }
 
@@ -73,8 +81,9 @@ export class AllowedStudentsController {
   }
 
   @Delete(':email')
-  async remove(@Param('email') email: string) {
-    await this.allowedStudents.remove(email);
+  async remove(@Param('email') email: string, @Req() req: any) {
+    const { wasAdmin } = await this.allowedStudents.remove(email, req.user.email);
+    if (wasAdmin) await this.users.setRoleIfExists(email, 'student');
     return { ok: true };
   }
 }

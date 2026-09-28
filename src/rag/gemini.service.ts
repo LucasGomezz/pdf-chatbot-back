@@ -62,6 +62,37 @@ export class GeminiService implements OnModuleInit {
     throw new Error('Embed failed after max retries');
   }
 
+  // Embebe varios textos en un solo request. Ante un 429 no espera: lanza
+  // EmbedRateLimitError con el tiempo sugerido por la API, para que quien llama
+  // decida (la ingesta por tandas se lo devuelve al navegador, que espera y reintenta).
+  async embedBatch(texts: string[]): Promise<number[][]> {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.embedModelName}:batchEmbedContents?key=${this.apiKey}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        requests: texts.map((text) => ({
+          model: `models/${this.embedModelName}`,
+          content: { parts: [{ text }] },
+          outputDimensionality: EMBED_DIMS,
+        })),
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+
+    if (res.status === 429) {
+      const retryInfo = data?.error?.details?.find((d: any) => d?.retryDelay);
+      const seconds = parseFloat(retryInfo?.retryDelay ?? '') || 20;
+      this.logger.warn(`Embed batch rate limit — retry in ${seconds}s`);
+      throw new EmbedRateLimitError(Math.ceil(seconds * 1000));
+    }
+    if (!res.ok) {
+      this.logger.error(`embedBatch error: ${JSON.stringify(data?.error)}`);
+      throw new Error(`Embed error ${res.status}: ${data?.error?.message}`);
+    }
+    return data.embeddings.map((e: any) => e.values as number[]);
+  }
+
   async *streamChat(
     systemPrompt: string,
     userPrompt: string,
@@ -100,6 +131,12 @@ export class GeminiService implements OnModuleInit {
     }
 
     this.logger.log(`Groq stream done — chunks=${tokenCount}  totalChars=${charCount}`);
+  }
+}
+
+export class EmbedRateLimitError extends Error {
+  constructor(public retryAfterMs: number) {
+    super('Embedding rate limit');
   }
 }
 

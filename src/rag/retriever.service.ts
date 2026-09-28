@@ -26,7 +26,8 @@ export class RetrieverService {
   ) {}
 
   async search(question: string): Promise<RetrievedChunk[]> {
-    const totalChunks = await this.chunkModel.countDocuments();
+    // Solo cuentan los fragmentos de documentos terminados (los que tienen embedding).
+    const totalChunks = await this.chunkModel.countDocuments({ embedding: { $exists: true } } as any);
     this.logger.log(`Total chunks in DB: ${totalChunks}`);
 
     if (totalChunks === 0) {
@@ -43,7 +44,7 @@ export class RetrieverService {
     const chapterNum = extractChapterNumber(normalizedQuestion);
     if (chapterNum !== null) {
       const headingChunks = await this.chunkModel
-        .find({ heading: { $regex: `cap\\.?\\s*${chapterNum}(?!\\d)`, $options: 'i' } })
+        .find({ heading: { $regex: `cap\\.?\\s*${chapterNum}(?!\\d)`, $options: 'i' }, embedding: { $exists: true } } as any)
         .select('_id heading text')
         .limit(TOP_K)
         .lean();

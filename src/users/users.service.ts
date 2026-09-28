@@ -15,10 +15,6 @@ export class UsersService {
     return this.userModel.create({ email, passwordHash, role });
   }
 
-  async existsAdmin(): Promise<boolean> {
-    return !!(await this.userModel.exists({ role: 'admin' }));
-  }
-
   async setRoleIfExists(email: string, role: UserRole): Promise<void> {
     await this.userModel.updateOne({ email: email.toLowerCase().trim() }, { $set: { role } });
   }

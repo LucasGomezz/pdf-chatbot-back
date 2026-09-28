@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import * as fs from 'fs';
@@ -10,11 +10,24 @@ import { CanvasFactory } from 'pdf-parse/worker';
 import { PDFParse } from 'pdf-parse';
 import { MaterialDocument, DocumentDoc } from './document.schema';
 import { Chunk, ChunkDocument } from './chunk.schema';
-import { GeminiService } from '../rag/gemini.service';
+import { EmbedRateLimitError, GeminiService } from '../rag/gemini.service';
 
 const CHUNK_SIZE = 800;
 const CHUNK_OVERLAP = 100;
 const ASSETS_DIR = path.join(process.cwd(), 'assets');
+const EMBED_BATCH_SIZE = 20;
+// Tiempo máximo que una llamada a processNext sigue arrancando tandas nuevas.
+// Chico a propósito para quedar lejos del timeout de las funciones de Vercel.
+const PROCESS_BUDGET_MS = 6000;
+
+export interface IngestProgress {
+  id: string;
+  status: 'processing' | 'ready';
+  processed: number;
+  total: number;
+  // Presente cuando la API de embeddings pidió esperar antes de seguir.
+  retryAfterMs?: number;
+}
 
 export function slugify(input: string): string {
   const slug = input
@@ -53,18 +66,32 @@ export class IngestService implements OnModuleInit {
     return this.ingestContent(content, slug, title, path.basename(filePath));
   }
 
-  async ingestPdfFile(buffer: Buffer, originalName: string): Promise<DocumentDoc> {
+  // Ingesta completa en un solo paso (seed inicial). Las subidas desde el panel usan
+  // startIngest + processNext por tandas, para no pasarse del tiempo máximo de Vercel.
+  async ingestContent(content: string, slug: string, title: string, sourceFile: string): Promise<DocumentDoc> {
+    const doc = await this.startIngest(content, slug, title, sourceFile);
+    for (;;) {
+      const progress = await this.processNext(String(doc._id));
+      if (progress.status === 'ready') break;
+      if (progress.retryAfterMs) await new Promise((r) => setTimeout(r, progress.retryAfterMs));
+    }
+    return (await this.docModel.findById(doc._id))!;
+  }
+
+  async startPdfIngest(buffer: Buffer, originalName: string): Promise<DocumentDoc> {
     const parser = new PDFParse({ data: buffer, CanvasFactory });
     const data = await parser.getText();
     await parser.destroy();
-    const text = this.cleanPdfText(data.text);
+    return this.startPdfTextIngest(data.text, originalName);
+  }
 
+  // Texto de un PDF ya extraído (en el navegador, para no mandar el PDF entero y
+  // chocar con el límite de ~4.5 MB por request de Vercel).
+  async startPdfTextIngest(rawText: string, originalName: string): Promise<DocumentDoc> {
+    const text = this.cleanPdfText(rawText);
     const title = path.basename(originalName, path.extname(originalName));
     const slug = slugify(title);
-    const sourceFile = `${slug}.md`;
-    const content = `# ${title}\n\n${text}`;
-
-    return this.ingestContent(content, slug, title, sourceFile);
+    return this.startIngest(`# ${title}\n\n${text}`, slug, title, `${slug}.md`);
   }
 
   private cleanPdfText(raw: string): string {
@@ -76,7 +103,16 @@ export class IngestService implements OnModuleInit {
       .trim();
   }
 
-  async ingestContent(content: string, slug: string, title: string, sourceFile: string): Promise<DocumentDoc> {
+  // Crea el documento en estado 'processing' con sus fragmentos todavía sin
+  // embeddings. No toca la versión anterior: esa sigue activa hasta que la nueva termine.
+  async startIngest(content: string, slug: string, title: string, sourceFile: string): Promise<DocumentDoc> {
+    const chunks = this.chunkMarkdown(content);
+    if (chunks.length === 0) {
+      throw new BadRequestException(
+        'El archivo no tiene texto para indexar. Si es un PDF escaneado (imágenes), hace falta pasarlo por OCR antes de subirlo.',
+      );
+    }
+
     // Best-effort local cache of the ingested text, for local debugging.
     // Harmless if this fails — e.g. a serverless deploy with a read-only filesystem.
     try {
@@ -89,34 +125,106 @@ export class IngestService implements OnModuleInit {
       this.logger.warn(`Could not cache to assets/ (read-only filesystem?): ${err.message}`);
     }
 
-    // Find last version for this slug
+    // Un intento anterior que quedó a medias para el mismo archivo se descarta:
+    // esta subida lo reemplaza.
+    const stale = await this.docModel.find({ slug, status: 'processing' });
+    if (stale.length > 0) {
+      const staleIds = stale.map((d) => d._id);
+      await this.chunkModel.deleteMany({ documentId: { $in: staleIds } } as any);
+      await this.docModel.deleteMany({ _id: { $in: staleIds } });
+    }
+
     const last = await this.docModel.findOne({ slug }).sort({ version: -1 });
     const version = last ? last.version + 1 : 1;
 
-    const doc = await this.docModel.create({ slug, title, sourceFile, version, ingestedAt: new Date() });
-
-    const chunks = this.chunkMarkdown(content);
-    this.logger.log(`Ingesting ${chunks.length} chunks for "${title}" v${version}...`);
-
-    for (let i = 0; i < chunks.length; i++) {
-      const { heading, text } = chunks[i];
-      const embedding = await this.gemini.embedText(text);
-      await this.chunkModel.create({ documentId: doc._id as any, order: i, heading, text, embedding });
-      this.logger.log(`  chunk ${i + 1}/${chunks.length} ingested`);
-      // 300ms entre requests para no superar el rate limit del free tier
-      if (i < chunks.length - 1) await new Promise((r) => setTimeout(r, 300));
+    const doc = await this.docModel.create({
+      slug, title, sourceFile, version, ingestedAt: new Date(),
+      status: 'processing', totalChunks: chunks.length, processedChunks: 0,
+    });
+    try {
+      await this.chunkModel.insertMany(
+        chunks.map(({ heading, text }, order) => ({ documentId: doc._id, order, heading, text })),
+      );
+    } catch (err) {
+      await this.chunkModel.deleteMany({ documentId: doc._id } as any);
+      await this.docModel.deleteOne({ _id: doc._id });
+      throw err;
     }
 
-    // Remove chunks from older versions of the same slug
-    if (last) {
-      const oldDocs = await this.docModel.find({ slug, _id: { $ne: doc._id } });
+    this.logger.log(`Started ingest of "${title}" v${version}: ${chunks.length} chunks`);
+    return doc;
+  }
+
+  // Calcula embeddings de los fragmentos pendientes durante como mucho
+  // PROCESS_BUDGET_MS y devuelve el progreso. El navegador la llama en loop
+  // hasta que el documento queda 'ready'.
+  async processNext(id: string): Promise<IngestProgress> {
+    const doc = await this.docModel.findById(id);
+    if (!doc) throw new NotFoundException('Document not found');
+    if (doc.status !== 'processing') return this.progressOf(doc, 'ready');
+
+    const started = Date.now();
+    while (Date.now() - started < PROCESS_BUDGET_MS) {
+      const pending = await this.chunkModel
+        .find({ documentId: doc._id, pendingEmbedding: { $exists: false }, embedding: { $exists: false } } as any)
+        .sort({ order: 1 })
+        .limit(EMBED_BATCH_SIZE)
+        .select('_id text');
+      if (pending.length === 0) {
+        await this.finalize(doc);
+        return this.progressOf(doc, 'ready');
+      }
+
+      let vectors: number[][];
+      try {
+        vectors = await this.gemini.embedBatch(pending.map((c) => c.text));
+      } catch (err) {
+        if (err instanceof EmbedRateLimitError) {
+          await this.refreshProgress(doc);
+          return { ...this.progressOf(doc, 'processing'), retryAfterMs: err.retryAfterMs };
+        }
+        throw err;
+      }
+
+      await this.chunkModel.bulkWrite(
+        pending.map((c, i) => ({
+          updateOne: { filter: { _id: c._id }, update: { $set: { pendingEmbedding: vectors[i] } } },
+        })) as any,
+      );
+      await this.refreshProgress(doc);
+      this.logger.log(`  "${doc.title}" v${doc.version}: ${doc.processedChunks}/${doc.totalChunks} chunks embedded`);
+    }
+    return this.progressOf(doc, 'processing');
+  }
+
+  private async refreshProgress(doc: DocumentDoc) {
+    doc.processedChunks = await this.chunkModel.countDocuments({
+      documentId: doc._id, pendingEmbedding: { $exists: true },
+    } as any);
+    await this.docModel.updateOne({ _id: doc._id }, { $set: { processedChunks: doc.processedChunks } });
+  }
+
+  // Publica la versión nueva de una sola vez y recién ahí borra las anteriores.
+  private async finalize(doc: DocumentDoc) {
+    await this.chunkModel.collection.updateMany(
+      { documentId: doc._id, pendingEmbedding: { $exists: true } },
+      [{ $set: { embedding: '$pendingEmbedding' } }, { $unset: 'pendingEmbedding' }],
+    );
+    doc.status = 'ready';
+    doc.processedChunks = doc.totalChunks;
+    await this.docModel.updateOne({ _id: doc._id }, { $set: { status: 'ready', processedChunks: doc.totalChunks } });
+
+    const oldDocs = await this.docModel.find({ slug: doc.slug, _id: { $ne: doc._id } });
+    if (oldDocs.length > 0) {
       const oldIds = oldDocs.map((d) => d._id);
       await this.chunkModel.deleteMany({ documentId: { $in: oldIds } } as any);
       await this.docModel.deleteMany({ _id: { $in: oldIds } });
     }
+    this.logger.log(`Ingestion complete for "${doc.title}" v${doc.version}`);
+  }
 
-    this.logger.log(`Ingestion complete for "${title}" v${version}`);
-    return doc;
+  private progressOf(doc: DocumentDoc, status: 'processing' | 'ready'): IngestProgress {
+    return { id: String(doc._id), status, processed: doc.processedChunks, total: doc.totalChunks };
   }
 
   async deleteDocument(id: string): Promise<void> {
