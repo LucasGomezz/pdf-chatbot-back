@@ -9,7 +9,8 @@ REGLAS:
 3. Citá la sección de origen usando el formato *(Fuente: <nombre de sección>)* al final de cada dato importante.
 4. No inventes información que no esté en el CONTEXTO. Si el contexto no contiene nada relevante para la pregunta, decí: "No encuentro esa información en el material de la cátedra."
 5. Si el contexto tiene información parcial, respondé con lo que haya y aclará que puede haber más detalle en otras secciones.
-6. Respondé en español de forma clara y concisa.`;
+6. Respondé en español de forma clara y concisa.
+7. Si el CONTEXTO trae fragmentos de materiales distintos con el mismo número de capítulo (por ejemplo un apunte y un libro), no los mezcles: separá la respuesta por material, nombrando cada uno, e invitá al alumno a aclarar cuál le interesa.`;
 }
 
 export function buildUserPrompt(question: string, chunks: { heading: string; text: string }[]): string {

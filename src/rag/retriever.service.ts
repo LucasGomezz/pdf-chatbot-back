@@ -66,28 +66,23 @@ export class RetrieverService implements OnModuleInit {
       this.logger.log(`Query normalized: "${question}" → "${normalizedQuestion}"`);
     }
 
+    const queryVector = await this.gemini.embedText(normalizedQuestion);
+
     // If the question targets a specific chapter, search by heading first
     const chapterNum = extractChapterNumber(normalizedQuestion);
     if (chapterNum !== null) {
       const headingChunks = await this.chunkModel
         .find({ heading: { $regex: `cap\\.?\\s*${chapterNum}(?!\\d)`, $options: 'i' }, embedding: { $exists: true } } as any)
-        .select('_id heading text')
-        .limit(TOP_K)
+        .select('_id documentId heading text embedding')
         .lean();
 
       if (headingChunks.length > 0) {
-        this.logger.log(`Heading search for cap${chapterNum}: found ${headingChunks.length} chunks (headings: ${[...new Set(headingChunks.map((c: any) => c.heading))].join(', ')})`);
-        return headingChunks.map((r: any) => ({
-          id: r._id.toString(),
-          heading: r.heading,
-          text: truncate(r.text),
-          score: 1.0,
-        }));
+        const selected = pickChapterChunks(headingChunks, normalizedQuestion, queryVector);
+        this.logger.log(`Heading search for cap${chapterNum}: ${headingChunks.length} chunks matched, using ${selected.length} (headings: ${[...new Set(selected.map((c) => c.heading))].join(', ')})`);
+        return selected;
       }
       this.logger.log(`Heading search for cap${chapterNum}: no match, falling back to vector search`);
     }
-
-    const queryVector = await this.gemini.embedText(normalizedQuestion);
     this.logger.log(`Query vector dims: ${queryVector.length}`);
 
     const results = await (this.chunkModel as any).aggregate([
@@ -136,6 +131,59 @@ function normalizeQuery(q: string): string {
 function extractChapterNumber(q: string): number | null {
   const m = q.match(/\bcap\s*(\d+)\b/i);
   return m ? parseInt(m[1], 10) : null;
+}
+
+// Palabras que no sirven para distinguir un material de otro ("cap", "capitulo", números).
+const TITLE_STOPWORDS = new Set(['cap', 'capitulo', 'capitulos', 'del', 'las', 'los', 'por', 'para', 'con']);
+
+// Varios materiales pueden tener el mismo número de capítulo (p. ej. "Cap1-Errores"
+// y "LIBRO Jardi Cap. 1"). Si la pregunta nombra alguno ("libro", "jardi",
+// "errores"), se usa solo ese. Si no, se mandan fragmentos de cada uno para que la
+// respuesta distinga los materiales en vez de elegir uno a ciegas.
+function pickChapterChunks(chunks: any[], question: string, queryVector: number[]): RetrievedChunk[] {
+  const byDoc = new Map<string, any[]>();
+  for (const c of chunks) {
+    const key = String(c.documentId);
+    if (!byDoc.has(key)) byDoc.set(key, []);
+    byDoc.get(key)!.push(c);
+  }
+
+  let docs = [...byDoc.values()];
+  if (docs.length > 1) {
+    const questionWords = new Set(words(question));
+    const named = docs.filter((d) => words(d[0].heading).some((w) => questionWords.has(w)));
+    if (named.length > 0) docs = named;
+  }
+
+  const perDoc = docs.length > 1 ? 2 : TOP_K;
+  return docs
+    .flatMap((d) =>
+      d
+        .map((c) => ({ c, score: cosine(queryVector, c.embedding) }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, perDoc),
+    )
+    .sort((a, b) => b.score - a.score)
+    .slice(0, TOP_K * 2)
+    .map(({ c, score }) => ({ id: c._id.toString(), heading: c.heading, text: truncate(c.text), score }));
+}
+
+function words(s: string): string[] {
+  return s
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .split(/[^a-z]+/)
+    .filter((w) => w.length >= 3 && !TITLE_STOPWORDS.has(w));
+}
+
+function cosine(a: number[], b: number[]): number {
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  return na && nb ? dot / Math.sqrt(na * nb) : 0;
 }
 
 function truncate(text: string): string {
