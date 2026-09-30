@@ -173,7 +173,9 @@ function words(s: string): string[] {
     .toLowerCase()
     .normalize('NFD').replace(/[̀-ͯ]/g, '')
     .split(/[^a-z]+/)
-    .filter((w) => w.length >= 3 && !TITLE_STOPWORDS.has(w));
+    .filter((w) => w.length >= 3 && !TITLE_STOPWORDS.has(w))
+    // Sin la "s" final, "apuntes" en la pregunta coincide con "Apunte" en el título.
+    .map((w) => (w.length > 3 ? w.replace(/s$/, '') : w));
 }
 
 function cosine(a: number[], b: number[]): number {
